@@ -1,4 +1,6 @@
 import torch
+from torch import nn
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 from .outfit_transformer import (
     OutfitTransformerConfig, 
@@ -10,6 +12,22 @@ from .outfit_clip_transformer import (
 )
 from torch.distributed import get_rank, get_world_size
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+
+@dataclass
+class ResNetOnlyConfig(OutfitTransformerConfig):
+    item_enc_dim_per_modality: int = 512
+    aggregation_method: str = 'sum'
+
+
+class _PrecomputedImageEncoder(nn.Module):
+    d_embed = 512
+    image_size = 224
+
+
+class ResNetOnlyOutfitTransformer(OutfitTransformer):
+    def _init_item_enc(self):
+        self.item_enc = _PrecomputedImageEncoder()
 
 
 def load_model(model_type, checkpoint=None, **cfg_kwargs):
@@ -40,6 +58,8 @@ def load_model(model_type, checkpoint=None, **cfg_kwargs):
         model = OutfitTransformer(OutfitTransformerConfig(**cfg))
     elif model_type == 'clip':
         model = OutfitCLIPTransformer(OutfitCLIPTransformerConfig(**cfg))
+    elif model_type == 'resnet18':
+        model = ResNetOnlyOutfitTransformer(ResNetOnlyConfig(**cfg))
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")
     

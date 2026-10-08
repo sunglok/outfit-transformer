@@ -32,12 +32,17 @@ POLYVORE_PRECOMPUTED_CLIP_EMBEDDING_DIR = (
 )
 
 metadata = load_dataset('owj0421/polyvore')['data']
+_metadata_item_ids = metadata['item_id']
 item_id2metadata_idx = {
-    j['item_id']: i for i, j in tqdm(enumerate(metadata))
+    item_id: i for i, item_id in enumerate(_metadata_item_ids)
 }
 metadata_idx2item_id = {
-    j: i for i, j in tqdm(enumerate(item_id2metadata_idx))
+    i: item_id for i, item_id in enumerate(_metadata_item_ids)
 }
+
+def load_metadata(dataset_dir=None):
+    """Compatibility shim for the pre-Hugging-Face runner API."""
+    return metadata
 
 def load_embedding_dict(dataset_dir):
     e_dir = POLYVORE_PRECOMPUTED_CLIP_EMBEDDING_DIR.format(dataset_dir=dataset_dir)
@@ -55,7 +60,7 @@ def load_embedding_dict(dataset_dir):
     all_embeddings = np.concatenate(all_embeddings, axis=0)
     print(f"Loaded {len(all_embeddings)} embeddings")
     
-    all_embeddings_dict = {item_id: embedding for item_id, embedding in zip(all_ids, all_embeddings)}
+    all_embeddings_dict = {str(item_id): embedding for item_id, embedding in zip(all_ids, all_embeddings)}
     print(f"Created embeddings dictionary")
     
     return all_embeddings_dict
@@ -74,19 +79,23 @@ class PolyvoreCompatibilityDataset(Dataset):
 
     def __init__(
         self,
+        dataset_dir=None,
         dataset_type: Literal['nondisjoint', 'disjoint'] = 'nondisjoint',
         dataset_split: Literal['train', 'valid', 'test'] = 'train',
+        metadata=None,
+        load_image=False,
         embedding_dict: dict = None,
     ):
         # Modified >>>
         task = 'compatibility'
+        hf_split = 'validation' if dataset_split == 'valid' else dataset_split
         self.data = load_dataset(
-            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=dataset_split
+            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=hf_split
         )
         self.id_converter = {}
         task = 'default'
         set_infos = load_dataset(
-            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=dataset_split
+            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=hf_split
         )
         for i in set_infos:
             for j in i['items']:
@@ -98,10 +107,10 @@ class PolyvoreCompatibilityDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx) -> FashionCompatibilityData:
-        label = self.data[idx]['label']
+        label = int(self.data[idx]['label'])
         outfit = [
             load_item(self.id_converter[item_id], self.embedding_dict)
-            for item_id in self.data[idx]['items']
+            for item_id in self.data[idx]['items'] if item_id
         ]
         
         return FashionCompatibilityData(
@@ -113,19 +122,23 @@ class PolyvoreFillInTheBlankDataset(Dataset):
 
     def __init__(
         self,
+        dataset_dir=None,
         dataset_type: Literal['nondisjoint', 'disjoint'] = 'nondisjoint',
         dataset_split: Literal['train', 'valid', 'test'] = 'train',
+        metadata=None,
+        load_image=False,
         embedding_dict: dict = None,
     ):
         # Modified >>>
         task = 'fill_in_the_blank'
+        hf_split = 'validation' if dataset_split == 'valid' else dataset_split
         self.data = load_dataset(
-            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=dataset_split
+            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=hf_split
         )
         self.id_converter = {}
         task = 'default'
         set_infos = load_dataset(
-            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=dataset_split
+            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=hf_split
         )
         for i in set_infos:
             for j in i['items']:
@@ -137,14 +150,14 @@ class PolyvoreFillInTheBlankDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx) -> FashionFillInTheBlankData:
-        label = self.data[idx]['label']
+        label = int(self.data[idx]['label'])
         candidates = [
             load_item(self.id_converter[item_id], self.embedding_dict)
-            for item_id in self.data[idx]['candidates']
+            for item_id in self.data[idx]['candidates'] if item_id
         ]
         outfit = [
             load_item(self.id_converter[item_id], self.embedding_dict)
-            for item_id in self.data[idx]['items']
+            for item_id in self.data[idx]['items'] if item_id
         ]
         
         return FashionFillInTheBlankData(
@@ -158,14 +171,18 @@ class PolyvoreTripletDataset(Dataset):
 
     def __init__(
         self,
+        dataset_dir=None,
         dataset_type: Literal['nondisjoint', 'disjoint'] = 'nondisjoint',
         dataset_split: Literal['train', 'valid', 'test'] = 'train',
+        metadata=None,
+        load_image=False,
         embedding_dict: dict = None,
     ):
         # Modified >>>
         task = 'default'
+        hf_split = 'validation' if dataset_split == 'valid' else dataset_split
         self.data = load_dataset(
-            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=dataset_split
+            'owj0421/polyvore-outfits', f'{dataset_type}_{task}', split=hf_split
         )
         # <<<
         self.embedding_dict = embedding_dict
@@ -191,6 +208,8 @@ class PolyvoreItemDataset(Dataset):
 
     def __init__(
         self,
+        dataset_dir=None,
+        load_image=True,
         embedding_dict: dict = None,
     ):
         self.embedding_dict = embedding_dict

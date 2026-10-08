@@ -44,7 +44,7 @@ all_embeddings_dict = None
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--model_type', type=str, choices=['original', 'clip'],
+    parser.add_argument('--model_type', type=str, choices=['original', 'clip', 'resnet18'],
                         default='clip')
     parser.add_argument('--polyvore_dir', type=str, 
                         default='./datasets/polyvore')
@@ -66,6 +66,9 @@ def parse_args():
                         default=42)
     parser.add_argument('--checkpoint', type=str, 
                         default=None)
+    parser.add_argument('--resume', type=str,
+                        default=None,
+                        help='Resume model, optimizer, scheduler, and epoch from a training checkpoint.')
     parser.add_argument('--world_size', type=int, 
                         default=-1)
     parser.add_argument('--project_name', type=str, 
@@ -91,11 +94,13 @@ def setup_dataloaders(rank, world_size, args):
     if world_size == 1:
         train_dataloader = DataLoader(
             dataset=train, batch_size=args.batch_sz_per_gpu, shuffle=True,
-            num_workers=args.n_workers_per_gpu, collate_fn=collate_fn.triplet_collate_fn
+            num_workers=args.n_workers_per_gpu, collate_fn=collate_fn.triplet_collate_fn,
+            persistent_workers=args.n_workers_per_gpu > 0
         )
         valid_dataloader = DataLoader(
             dataset=valid, batch_size=args.batch_sz_per_gpu, shuffle=False,
-            num_workers=args.n_workers_per_gpu, collate_fn=collate_fn.fitb_collate_fn
+            num_workers=args.n_workers_per_gpu, collate_fn=collate_fn.fitb_collate_fn,
+            persistent_workers=args.n_workers_per_gpu > 0
         )
         
     else:
@@ -107,11 +112,13 @@ def setup_dataloaders(rank, world_size, args):
         )
         train_dataloader = DataLoader(
             dataset=train, batch_size=args.batch_sz_per_gpu, shuffle=False,
-            num_workers=args.n_workers_per_gpu, collate_fn=collate_fn.triplet_collate_fn, sampler=train_sampler
+            num_workers=args.n_workers_per_gpu, collate_fn=collate_fn.triplet_collate_fn, sampler=train_sampler,
+            persistent_workers=args.n_workers_per_gpu > 0
         )
         valid_dataloader = DataLoader(
             dataset=valid, batch_size=args.batch_sz_per_gpu, shuffle=False,
-            num_workers=args.n_workers_per_gpu, collate_fn=collate_fn.fitb_collate_fn, sampler=valid_sampler
+            num_workers=args.n_workers_per_gpu, collate_fn=collate_fn.fitb_collate_fn, sampler=valid_sampler,
+            persistent_workers=args.n_workers_per_gpu > 0
         )
 
     return train_dataloader, valid_dataloader
@@ -241,7 +248,7 @@ def train(
     logger.info(f'Dataloaders Setup Completed')
     
     # Model setting
-    model = load_model(model_type=args.model_type, checkpoint=args.checkpoint)
+    model = load_model(model_type=args.model_type, checkpoint=args.resume or args.checkpoint)
     logger.info(f'Model Loaded and Wrapped with DDP')
     
     # Optimizer, Scheduler, Loss Function
@@ -255,7 +262,23 @@ def train(
     logger.info(f'Optimizer and Scheduler Setup Completed')
 
     # Training Loop
-    for epoch in range(args.n_epochs):
+    start_epoch = 0
+    if args.resume:
+        map_location = f'cuda:{rank}' if torch.cuda.is_available() else 'cpu'
+        resume_state = torch.load(args.resume, map_location=map_location, weights_only=False)
+        required_keys = {'optimizer', 'scheduler', 'epoch'}
+        missing_keys = required_keys.difference(resume_state)
+        if missing_keys:
+            raise ValueError(
+                f'Checkpoint {args.resume} cannot resume training; missing keys: '
+                f'{sorted(missing_keys)}. Use --checkpoint for weights-only initialization.'
+            )
+        optimizer.load_state_dict(resume_state['optimizer'])
+        scheduler.load_state_dict(resume_state['scheduler'])
+        start_epoch = int(resume_state['epoch'])
+        logger.info(f'Resuming training at epoch {start_epoch + 1}/{args.n_epochs}')
+
+    for epoch in range(start_epoch, args.n_epochs):
         if world_size > 1:
             train_dataloader.sampler.set_epoch(epoch)
         train_logs = train_step(
@@ -277,7 +300,10 @@ def train(
         if rank == 0:
             torch.save({
                 'config': model.module.cfg.__dict__ if world_size > 1 else model.cfg.__dict__,
-                'model': model.state_dict()
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'epoch': epoch + 1,
             }, checkpoint_path)
             
             score_path = os.path.join(checkpoint_dir, f'epoch_{epoch+1}_score.json')
@@ -291,6 +317,9 @@ def train(
         state_dict = torch.load(checkpoint_path, map_location=map_location)
         model.load_state_dict(state_dict['model'])
         logger.info(f'Checkpoint loaded from {checkpoint_path}')
+
+        if args.demo:
+            break
 
     cleanup()
 
@@ -307,7 +336,7 @@ if __name__ == '__main__':
     else:
         wandb_run = None
     
-    mp.spawn(
-        train, args=(args.world_size, args, wandb_run), 
-        nprocs=args.world_size, join=True
-    )
+    if args.world_size == 1:
+        train(0, 1, args, wandb_run)
+    else:
+        mp.spawn(train, args=(args.world_size, args, wandb_run), nprocs=args.world_size, join=True)

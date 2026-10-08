@@ -53,6 +53,8 @@ def parse_args():
     parser.add_argument('--world_size', type=int, 
                         default=-1)
     parser.add_argument('--demo', action='store_true')
+    parser.add_argument('--test_only', action='store_true',
+                        help='Precompute only items referenced by CP/FITB test splits')
     
     return parser.parse_args()
 
@@ -61,6 +63,22 @@ def setup_dataloaders(rank, world_size, args):
     item_dataset = polyvore.PolyvoreItemDataset(
         dataset_dir=args.polyvore_dir, load_image=True
     )
+
+    if args.test_only:
+        cp = polyvore.PolyvoreCompatibilityDataset(
+            dataset_type=args.polyvore_type, dataset_split='test'
+        )
+        fitb = polyvore.PolyvoreFillInTheBlankDataset(
+            dataset_type=args.polyvore_type, dataset_split='test'
+        )
+        item_ids = set()
+        for row in cp.data:
+            item_ids.update(cp.id_converter[item_id] for item_id in row['items'] if item_id)
+        for row in fitb.data:
+            item_ids.update(fitb.id_converter[item_id] for item_id in row['items'] if item_id)
+            item_ids.update(fitb.id_converter[item_id] for item_id in row['candidates'] if item_id)
+        indices = sorted(polyvore.item_id2metadata_idx[item_id] for item_id in item_ids)
+        item_dataset = torch.utils.data.Subset(item_dataset, indices)
 
     n_items = len(item_dataset)
     n_items_per_gpu = n_items // world_size
@@ -128,7 +146,10 @@ if __name__ == '__main__':
     if args.world_size == -1:
         args.world_size = torch.cuda.device_count()
         
-    mp.spawn(
-        compute, args=(args.world_size, args), 
-        nprocs=args.world_size, join=True
-    )
+    if args.world_size == 1:
+        compute(0, 1, args)
+    else:
+        mp.spawn(
+            compute, args=(args.world_size, args),
+            nprocs=args.world_size, join=True
+        )

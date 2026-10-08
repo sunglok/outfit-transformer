@@ -28,7 +28,7 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--model_type', type=str, choices=['original', 'clip'],
+    parser.add_argument('--model_type', type=str, choices=['original', 'clip', 'resnet18'],
                         default='clip')
     parser.add_argument('--polyvore_dir', type=str, 
                         default='./datasets/polyvore')
@@ -96,7 +96,7 @@ def validation(args):
     
     if args.checkpoint:
         result_dir = os.path.join(
-            RESULT_DIR, args.checkpoint.split('/')[-2],
+            RESULT_DIR, pathlib.Path(args.checkpoint).parent.name,
         )
     else:
         result_dir = os.path.join(

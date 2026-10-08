@@ -33,7 +33,7 @@ class ItemEncoder(nn.Module):
     
     def _build_encoders(self, model_name):
         self.image_enc = Resnet18ImageEncoder(
-            embedding_size=self.enc_dim_per_modality,
+            d_embed=self.enc_dim_per_modality,
         )
         self.text_enc = HuggingFaceTextEncoder(
             embedding_size=self.enc_dim_per_modality,
