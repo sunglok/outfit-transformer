@@ -118,7 +118,12 @@ class OutfitTransformer(nn.Module):
             [[f"{item.description}" for item in outfit] for outfit in outfits], 
             self.text_pad, max_length
         )
-        mask = [[0] * len(seq) + [1] * (max_length - len(seq)) for seq in outfits]
+        mask = []
+        for sequence in outfits:
+            valid_length = min(len(sequence), max_length)
+            mask.append(
+                [0] * valid_length + [1] * (max_length - valid_length)
+            )
         
         return images, texts, torch.BoolTensor(mask).to(self.device)
     
