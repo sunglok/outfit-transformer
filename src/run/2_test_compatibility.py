@@ -29,7 +29,7 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument('--model_type', type=str,
-                        choices=['original', 'clip', 'resnet18', 'resnet18_finetune'],
+                        choices=['original', 'clip', 'resnet18'],
                         default='clip')
     parser.add_argument('--polyvore_dir', type=str, 
                         default='./datasets/polyvore')
@@ -52,7 +52,7 @@ def parse_args():
 
 def validation(args):
     metadata = polyvore.load_metadata(args.polyvore_dir)
-    use_precomputed_embedding = args.model_type in {'clip', 'resnet18'}
+    use_precomputed_embedding = args.model_type == 'clip'
     embedding_dict = (
         polyvore.load_embedding_dict(args.polyvore_dir)
         if use_precomputed_embedding else None

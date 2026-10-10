@@ -1,7 +1,5 @@
 import torch
-from torch import nn
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
 from .outfit_transformer import (
     OutfitTransformerConfig, 
     OutfitTransformer
@@ -16,29 +14,13 @@ from .modules.encoder import ResNet18ImageOnlyEncoder
 
 
 @dataclass
-class ResNetOnlyConfig(OutfitTransformerConfig):
-    item_enc_dim_per_modality: int = 512
-    aggregation_method: str = 'sum'
-
-
-class _PrecomputedImageEncoder(nn.Module):
-    d_embed = 512
-    image_size = 224
-
-
-class ResNetOnlyOutfitTransformer(OutfitTransformer):
-    def _init_item_enc(self):
-        self.item_enc = _PrecomputedImageEncoder()
-
-
-@dataclass
-class ResNet18FineTuneConfig(OutfitTransformerConfig):
+class ResNet18Config(OutfitTransformerConfig):
     item_enc_dim_per_modality: int = 64
     aggregation_method: str = 'sum'
 
 
-class ResNet18FineTuneOutfitTransformer(OutfitTransformer):
-    """Image-only OutfitTransformer that fine-tunes ResNet-18 end to end."""
+class ResNet18OutfitTransformer(OutfitTransformer):
+    """Image-only OutfitTransformer with a 64-dimensional item encoder."""
 
     def _init_item_enc(self):
         self.item_enc = ResNet18ImageOnlyEncoder(
@@ -46,8 +28,13 @@ class ResNet18FineTuneOutfitTransformer(OutfitTransformer):
             enc_norm_out=self.cfg.item_enc_norm_out,
         )
 
+    def set_image_backbone_trainable(self, trainable: bool):
+        self.item_enc.set_backbone_trainable(trainable)
 
-def load_model(model_type, checkpoint=None, **cfg_kwargs):
+
+def load_model(
+    model_type, checkpoint=None, image_backbone_mode='frozen', **cfg_kwargs
+):
     is_distributed = torch.distributed.is_initialized()
 
     # 분산 학습 환경 설정
@@ -76,10 +63,19 @@ def load_model(model_type, checkpoint=None, **cfg_kwargs):
     elif model_type == 'clip':
         model = OutfitCLIPTransformer(OutfitCLIPTransformerConfig(**cfg))
     elif model_type == 'resnet18':
-        model = ResNetOnlyOutfitTransformer(ResNetOnlyConfig(**cfg))
-    elif model_type == 'resnet18_finetune':
-        model = ResNet18FineTuneOutfitTransformer(
-            ResNet18FineTuneConfig(**cfg)
+        item_dim = cfg.get('item_enc_dim_per_modality', 64)
+        if item_dim != 64:
+            raise ValueError(
+                'Legacy 512-dimensional resnet18 checkpoints are not compatible '
+                'with the unified 64-dimensional ResNet-18 model.'
+            )
+        model = ResNet18OutfitTransformer(ResNet18Config(**cfg))
+        if image_backbone_mode not in {'frozen', 'finetune'}:
+            raise ValueError(
+                'image_backbone_mode must be either "frozen" or "finetune".'
+            )
+        model.set_image_backbone_trainable(
+            image_backbone_mode == 'finetune'
         )
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")

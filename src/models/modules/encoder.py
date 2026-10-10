@@ -77,7 +77,9 @@ class ResNet18ImageOnlyEncoder(nn.Module):
     def __init__(self, d_embed=64, enc_norm_out=True):
         super().__init__()
         self.enc_norm_out = enc_norm_out
-        self.image_enc = Resnet18ImageEncoder(d_embed=d_embed, freeze=False)
+        self.image_enc = Resnet18ImageEncoder(
+            d_embed=d_embed, backbone_trainable=False
+        )
 
     @property
     def d_embed(self):
@@ -86,6 +88,9 @@ class ResNet18ImageOnlyEncoder(nn.Module):
     @property
     def image_size(self):
         return self.image_enc.image_size
+
+    def set_backbone_trainable(self, trainable: bool):
+        self.image_enc.set_backbone_trainable(trainable)
 
     def forward(self, images, texts=None, *args, **kwargs):
         return self.image_enc(

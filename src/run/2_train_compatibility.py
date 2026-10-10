@@ -43,8 +43,11 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument('--model_type', type=str,
-                        choices=['original', 'clip', 'resnet18', 'resnet18_finetune'],
+                        choices=['original', 'clip', 'resnet18'],
                         default='clip')
+    parser.add_argument('--image_backbone_mode', type=str,
+                        choices=['frozen', 'finetune'], default='frozen',
+                        help='For resnet18, freeze or fine-tune the ImageNet backbone. The 512-to-64 projection always trains.')
     parser.add_argument('--polyvore_dir', type=str, 
                         default='./datasets/polyvore')
     parser.add_argument('--polyvore_type', type=str, choices=['nondisjoint', 'disjoint'],
@@ -57,6 +60,8 @@ def parse_args():
                         default=200)
     parser.add_argument('--lr', type=float,
                         default=2e-5)
+    parser.add_argument('--backbone_lr', type=float, default=None,
+                        help='Optional ResNet-18 backbone LR in finetune mode; defaults to --lr.')
     parser.add_argument('--accumulation_steps', type=int,
                         default=4)
     parser.add_argument('--wandb_key', type=str, 
@@ -82,7 +87,7 @@ def parse_args():
 
 def setup_dataloaders(rank, world_size, args):
     metadata = polyvore.load_metadata(args.polyvore_dir)
-    use_precomputed_embedding = args.model_type in {'clip', 'resnet18'}
+    use_precomputed_embedding = args.model_type == 'clip'
     embedding_dict = (
         polyvore.load_embedding_dict(args.polyvore_dir)
         if use_precomputed_embedding else None
@@ -149,7 +154,7 @@ def train_step(
         
         preds = model(
             queries,
-            use_precomputed_embedding=args.model_type in {'clip', 'resnet18'},
+            use_precomputed_embedding=args.model_type == 'clip',
         ).squeeze(1)
         
         loss = loss_fn(y_true=labels, y_prob=preds) / args.accumulation_steps
@@ -207,7 +212,7 @@ def valid_step(
     
         preds = model(
             queries,
-            use_precomputed_embedding=args.model_type in {'clip', 'resnet18'},
+            use_precomputed_embedding=args.model_type == 'clip',
         ).squeeze(1)
         
         loss = loss_fn(y_true=labels, y_prob=preds) / args.accumulation_steps
@@ -264,14 +269,34 @@ def train(
     logger.info(f'Dataloaders Setup Completed')
     
     # Model setting
-    model = load_model(model_type=args.model_type, checkpoint=args.resume or args.checkpoint)
+    model = load_model(
+        model_type=args.model_type,
+        checkpoint=args.resume or args.checkpoint,
+        image_backbone_mode=args.image_backbone_mode,
+    )
     logger.info(f'Model Loaded and Wrapped with DDP')
     
     # Optimizer, Scheduler, Loss Function
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    optimizer_groups = [{
+        'params': [parameter for parameter in model.parameters() if parameter.requires_grad],
+        'lr': args.lr,
+    }]
+    max_lrs = [args.lr]
+    if args.model_type == 'resnet18' and args.image_backbone_mode == 'finetune':
+        base_model = model.module if isinstance(model, DDP) else model
+        backbone_params = list(base_model.item_enc.image_enc.backbone_parameters())
+        backbone_ids = {id(parameter) for parameter in backbone_params}
+        optimizer_groups[0]['params'] = [
+            parameter for parameter in model.parameters()
+            if parameter.requires_grad and id(parameter) not in backbone_ids
+        ]
+        backbone_lr = args.backbone_lr if args.backbone_lr is not None else args.lr
+        optimizer_groups.append({'params': backbone_params, 'lr': backbone_lr})
+        max_lrs.append(backbone_lr)
+    optimizer = torch.optim.AdamW(optimizer_groups)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=args.lr, epochs=args.n_epochs, steps_per_epoch=int(len(train_dataloader) / args.accumulation_steps),
+        max_lr=max_lrs, epochs=args.n_epochs, steps_per_epoch=int(len(train_dataloader) / args.accumulation_steps),
         pct_start=0.3, anneal_strategy='cos', div_factor=25, final_div_factor=1e4
     )
     loss_fn = FocalLoss(alpha=0.5, gamma=2) # focal_loss(alpha=0.5, gamma=2)
@@ -329,6 +354,7 @@ def train(
                     0 if valid_logs['valid_auc'] > best_valid_auc
                     else epochs_without_improvement + 1
                 ),
+                'image_backbone_mode': args.image_backbone_mode,
             }, checkpoint_path)
             
             score_path = os.path.join(checkpoint_dir, f'epoch_{epoch+1}_score.json')
@@ -351,6 +377,7 @@ def train(
                     'valid_auc': valid_auc,
                     'best_valid_auc': valid_auc,
                     'epochs_without_improvement': 0,
+                    'image_backbone_mode': args.image_backbone_mode,
                 }, best_path)
                 logger.info(f'Best checkpoint updated at {best_path} (AUC={valid_auc:.6f})')
             else:

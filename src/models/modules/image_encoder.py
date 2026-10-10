@@ -72,7 +72,8 @@ class Resnet18ImageEncoder(BaseImageEncoder):
     
     def __init__(
         self, d_embed: int = 64,
-        size: int = 224, crop_size: int = 224, freeze: bool = False
+        size: int = 224, crop_size: int = 224,
+        backbone_trainable: bool = False,
     ):
         super().__init__()
 
@@ -80,15 +81,14 @@ class Resnet18ImageEncoder(BaseImageEncoder):
         self._d_embed = d_embed
         self.size = size
         self.crop_size = crop_size
-        self.freeze = freeze
+        self.backbone_trainable = backbone_trainable
         
         self.model = resnet18(weights=ResNet18_Weights.DEFAULT)
         self.model.fc = nn.Linear(
             in_features=self.model.fc.in_features, 
             out_features=d_embed
         )
-        if freeze:
-            freeze_model(self.model)
+        self.set_backbone_trainable(backbone_trainable)
         
         self.transform = transforms.Compose([
             transforms.Resize(self.size, interpolation=transforms.InterpolationMode.BICUBIC),
@@ -104,6 +104,29 @@ class Resnet18ImageEncoder(BaseImageEncoder):
     @property
     def d_embed(self) -> int:
         return self._d_embed
+
+    def backbone_parameters(self):
+        """Return ResNet parameters excluding the 512-to-d_embed projection."""
+        for name, parameter in self.model.named_parameters():
+            if not name.startswith('fc.'):
+                yield parameter
+
+    def set_backbone_trainable(self, trainable: bool):
+        """Freeze or fine-tune the ImageNet backbone while training the projection."""
+        self.backbone_trainable = trainable
+        for parameter in self.backbone_parameters():
+            parameter.requires_grad = trainable
+        for parameter in self.model.fc.parameters():
+            parameter.requires_grad = True
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if not self.backbone_trainable:
+            # Keep frozen BatchNorm statistics fixed while the projection trains.
+            for name, module in self.model.named_children():
+                if name != 'fc':
+                    module.eval()
+        return self
     
     def _forward(
         self, 
@@ -115,9 +138,23 @@ class Resnet18ImageEncoder(BaseImageEncoder):
         transformed_images = torch.stack(
             [self.transform(image) for image in images]
         ).to(self.device)
-        image_embeddings = self.model(
-            transformed_images
-        )
+        if self.backbone_trainable:
+            image_embeddings = self.model(transformed_images)
+        else:
+            # Run only the frozen backbone without autograd; the 512-to-64
+            # projection remains trainable.
+            with torch.no_grad():
+                features = self.model.conv1(transformed_images)
+                features = self.model.bn1(features)
+                features = self.model.relu(features)
+                features = self.model.maxpool(features)
+                features = self.model.layer1(features)
+                features = self.model.layer2(features)
+                features = self.model.layer3(features)
+                features = self.model.layer4(features)
+                features = self.model.avgpool(features)
+                features = torch.flatten(features, 1)
+            image_embeddings = self.model.fc(features)
         image_embeddings = image_embeddings.view(
             batch_size, -1, self.d_embed
         )

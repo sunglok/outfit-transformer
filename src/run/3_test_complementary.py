@@ -51,7 +51,11 @@ def parse_args():
 
 def validation(args):
     metadata = polyvore.load_metadata(args.polyvore_dir)
-    embedding_dict = polyvore.load_embedding_dict(args.polyvore_dir)
+    use_precomputed_embedding = args.model_type != 'resnet18'
+    embedding_dict = (
+        polyvore.load_embedding_dict(args.polyvore_dir)
+        if use_precomputed_embedding else None
+    )
     
     test = polyvore.PolyvoreFillInTheBlankDataset(
         dataset_dir=args.polyvore_dir, dataset_type=args.polyvore_type,
@@ -70,8 +74,8 @@ def validation(args):
     for i, data in enumerate(pbar):
         if args.demo and i > 2:
             break
-        batched_q_emb = model(data['query'], use_precomputed_embedding=True).unsqueeze(1) # (batch_sz, 1, embedding_dim)
-        batched_c_embs = model(sum(data['candidates'], []), use_precomputed_embedding=True) # (batch_sz * 4, embedding_dim)
+        batched_q_emb = model(data['query'], use_precomputed_embedding=use_precomputed_embedding).unsqueeze(1) # (batch_sz, 1, embedding_dim)
+        batched_c_embs = model(sum(data['candidates'], []), use_precomputed_embedding=use_precomputed_embedding) # (batch_sz * 4, embedding_dim)
         batched_c_embs = batched_c_embs.view(-1, 4, batched_c_embs.shape[1]) # (batch_sz, 4, embedding_dim)
         
         dists = torch.norm(batched_q_emb - batched_c_embs, dim=-1) # (batch_sz, 4)
