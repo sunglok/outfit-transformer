@@ -74,6 +74,36 @@ python -m src.run.2_test_compatibility \
 --checkpoint $PATH/TO/LOAD/MODEL/.PT/FILE
 ```
 
+To train an image-only model while fine-tuning the ImageNet-pretrained
+ResNet-18 backbone end to end, use `resnet18_finetune`. Unlike `resnet18`,
+this mode loads images during training and does not use the precomputed
+embedding pickle files. A smaller per-GPU batch size is recommended because
+the image backbone participates in backpropagation.
+
+```bash
+python -m src.run.2_train_compatibility \
+--model_type resnet18_finetune \
+--polyvore_dir $POLYVORE_DIR \
+--polyvore_type nondisjoint \
+--batch_sz_per_gpu 32 \
+--n_workers_per_gpu 4 \
+--n_epochs 50 \
+--lr 1e-5 \
+--accumulation_steps 4 \
+--project_name resnet18_image_only_finetune
+```
+
+Evaluate the resulting checkpoint with the matching model type:
+
+```bash
+python -m src.run.2_test_compatibility \
+--model_type resnet18_finetune \
+--polyvore_dir $POLYVORE_DIR \
+--polyvore_type nondisjoint \
+--batch_sz_per_gpu 32 \
+--checkpoint checkpoints/compatibility_resnet18_finetune_resnet18_image_only_finetune/best.pth
+```
+
 ### Step 3: Complementary Item Retrieval
 After completing Step 1, use the best checkpoint from the Compatibility Prediction task to train for the Complementary Item Retrieval (CIR) task.
 

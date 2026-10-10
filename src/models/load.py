@@ -12,6 +12,7 @@ from .outfit_clip_transformer import (
 )
 from torch.distributed import get_rank, get_world_size
 from torch.nn.parallel import DistributedDataParallel as DDP
+from .modules.encoder import ResNet18ImageOnlyEncoder
 
 
 @dataclass
@@ -28,6 +29,22 @@ class _PrecomputedImageEncoder(nn.Module):
 class ResNetOnlyOutfitTransformer(OutfitTransformer):
     def _init_item_enc(self):
         self.item_enc = _PrecomputedImageEncoder()
+
+
+@dataclass
+class ResNet18FineTuneConfig(OutfitTransformerConfig):
+    item_enc_dim_per_modality: int = 64
+    aggregation_method: str = 'sum'
+
+
+class ResNet18FineTuneOutfitTransformer(OutfitTransformer):
+    """Image-only OutfitTransformer that fine-tunes ResNet-18 end to end."""
+
+    def _init_item_enc(self):
+        self.item_enc = ResNet18ImageOnlyEncoder(
+            d_embed=self.cfg.item_enc_dim_per_modality,
+            enc_norm_out=self.cfg.item_enc_norm_out,
+        )
 
 
 def load_model(model_type, checkpoint=None, **cfg_kwargs):
@@ -60,6 +77,10 @@ def load_model(model_type, checkpoint=None, **cfg_kwargs):
         model = OutfitCLIPTransformer(OutfitCLIPTransformerConfig(**cfg))
     elif model_type == 'resnet18':
         model = ResNetOnlyOutfitTransformer(ResNetOnlyConfig(**cfg))
+    elif model_type == 'resnet18_finetune':
+        model = ResNet18FineTuneOutfitTransformer(
+            ResNet18FineTuneConfig(**cfg)
+        )
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")
     

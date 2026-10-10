@@ -42,7 +42,8 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--model_type', type=str, choices=['original', 'clip', 'resnet18'],
+    parser.add_argument('--model_type', type=str,
+                        choices=['original', 'clip', 'resnet18', 'resnet18_finetune'],
                         default='clip')
     parser.add_argument('--polyvore_dir', type=str, 
                         default='./datasets/polyvore')
@@ -81,15 +82,21 @@ def parse_args():
 
 def setup_dataloaders(rank, world_size, args):
     metadata = polyvore.load_metadata(args.polyvore_dir)
-    embedding_dict = polyvore.load_embedding_dict(args.polyvore_dir)
+    use_precomputed_embedding = args.model_type in {'clip', 'resnet18'}
+    embedding_dict = (
+        polyvore.load_embedding_dict(args.polyvore_dir)
+        if use_precomputed_embedding else None
+    )
     
     train = polyvore.PolyvoreCompatibilityDataset(
         dataset_dir=args.polyvore_dir, dataset_type=args.polyvore_type, 
-        dataset_split='train', metadata=metadata, load_image=False, embedding_dict=embedding_dict
+        dataset_split='train', metadata=metadata,
+        load_image=not use_precomputed_embedding, embedding_dict=embedding_dict
     )
     valid = polyvore.PolyvoreCompatibilityDataset(
         dataset_dir=args.polyvore_dir, dataset_type=args.polyvore_type, 
-        dataset_split='valid', metadata=metadata, load_image=False, embedding_dict=embedding_dict
+        dataset_split='valid', metadata=metadata,
+        load_image=not use_precomputed_embedding, embedding_dict=embedding_dict
     )
     
     if world_size == 1:
@@ -140,7 +147,10 @@ def train_step(
         queries = data['query']
         labels = torch.tensor(data['label'], dtype=torch.float32).to(rank)
         
-        preds = model(queries, use_precomputed_embedding=True).squeeze(1)
+        preds = model(
+            queries,
+            use_precomputed_embedding=args.model_type in {'clip', 'resnet18'},
+        ).squeeze(1)
         
         loss = loss_fn(y_true=labels, y_prob=preds) / args.accumulation_steps
         loss.backward()
@@ -195,7 +205,10 @@ def valid_step(
         queries = data['query']
         labels = torch.tensor(data['label'], dtype=torch.float32).to(rank)
     
-        preds = model(queries, use_precomputed_embedding=True).squeeze(1)
+        preds = model(
+            queries,
+            use_precomputed_embedding=args.model_type in {'clip', 'resnet18'},
+        ).squeeze(1)
         
         loss = loss_fn(y_true=labels, y_prob=preds) / args.accumulation_steps
         

@@ -70,6 +70,28 @@ class ItemEncoder(nn.Module):
         
         return encoder_outputs
 
+
+class ResNet18ImageOnlyEncoder(nn.Module):
+    """Trainable ResNet-18 item encoder without a text modality."""
+
+    def __init__(self, d_embed=64, enc_norm_out=True):
+        super().__init__()
+        self.enc_norm_out = enc_norm_out
+        self.image_enc = Resnet18ImageEncoder(d_embed=d_embed, freeze=False)
+
+    @property
+    def d_embed(self):
+        return self.image_enc.d_embed
+
+    @property
+    def image_size(self):
+        return self.image_enc.image_size
+
+    def forward(self, images, texts=None, *args, **kwargs):
+        return self.image_enc(
+            images, normalize=self.enc_norm_out, *args, **kwargs
+        )
+
     
 class CLIPItemEncoder(ItemEncoder):
     def __init__(

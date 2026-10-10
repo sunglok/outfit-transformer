@@ -28,7 +28,8 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--model_type', type=str, choices=['original', 'clip', 'resnet18'],
+    parser.add_argument('--model_type', type=str,
+                        choices=['original', 'clip', 'resnet18', 'resnet18_finetune'],
                         default='clip')
     parser.add_argument('--polyvore_dir', type=str, 
                         default='./datasets/polyvore')
@@ -51,11 +52,16 @@ def parse_args():
 
 def validation(args):
     metadata = polyvore.load_metadata(args.polyvore_dir)
-    embedding_dict = polyvore.load_embedding_dict(args.polyvore_dir)
+    use_precomputed_embedding = args.model_type in {'clip', 'resnet18'}
+    embedding_dict = (
+        polyvore.load_embedding_dict(args.polyvore_dir)
+        if use_precomputed_embedding else None
+    )
     
     test = polyvore.PolyvoreCompatibilityDataset(
         dataset_dir=args.polyvore_dir, dataset_type=args.polyvore_type, 
-        dataset_split='test', metadata=metadata, embedding_dict=embedding_dict
+        dataset_split='test', metadata=metadata,
+        load_image=not use_precomputed_embedding, embedding_dict=embedding_dict
     )
     test_dataloader = DataLoader(
         dataset=test, batch_size=args.batch_sz_per_gpu, shuffle=False,
@@ -72,7 +78,9 @@ def validation(args):
             if args.demo and i > 2:
                 break
             labels = torch.tensor(data['label'], dtype=torch.float32, device='cuda')
-            preds = model(data['query'], use_precomputed_embedding=True).squeeze(1)
+            preds = model(
+                data['query'], use_precomputed_embedding=use_precomputed_embedding
+            ).squeeze(1)
             
             all_preds.append(preds.detach())
             all_labels.append(labels.detach())
